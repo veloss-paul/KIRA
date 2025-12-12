@@ -90,7 +90,7 @@ JSON 배열로만 응답 (설명 없이):
 
     try:
         async with ClaudeSDKClient(options=options) as client:
-            await client.query("mcp__atlassian 도구를 사용해서 할당된 Jira 티켓을 조회하고 JSON으로 반환해주세요.")
+            await client.query("mcp__atlassian__* 도구를 사용해서 할당된 Jira 티켓을 조회하고 JSON으로 반환해주세요.")
 
             result_message = ""
             async for message in client.receive_response():

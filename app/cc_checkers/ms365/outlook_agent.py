@@ -123,7 +123,7 @@ async def call_email_task_extractor(
     settings = get_settings()
     bot_name = settings.BOT_NAME or "봇"
 
-    email_task_memory_query = f"""다음 {len(emails)}개의 이메일에서 관련된 모든 사람의 정보를 찾아 메모리를 취합해 알려주세요.
+    email_task_memory_query = f"""다음 {len(emails)}개의 이메일에서 발신자의 정보와 관련된 모든 사람의 정보를 찾아 메모리를 취합해 알려주세요.
 반드시 해당 채널과 요청 유저에 대한 **지침**과 정보(channel_id, user_id, user_name)를 포함하세요.
 
 {emails_text}"""

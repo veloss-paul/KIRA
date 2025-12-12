@@ -45,10 +45,10 @@ async def fetch_new_emails() -> List[Dict[str, Any]]:
     }
 
     system_prompt = """당신은 Outlook 이메일 데이터 수집 전문가입니다.
-Lokka MCP (Microsoft 365 MCP)를 사용하여 이메일 목록을 조회하고, 구조화된 JSON 데이터로 반환해야 합니다.
+Lokka MCP (Microsoft 365 MCP)를 사용하여 읽지 않은 이메일 목록을 조회하고, 구조화된 JSON 데이터로 반환해야 합니다.
 
 **작업 지시:**
-1. `mcp__ms365__*` 도구를 사용하여 받은편지함의 읽지 않은 이메일을 최신 10개까지 조회하세요
+1. `mcp__ms365__*` 도구를 사용하여 받은편지함의 읽지 않은 이메일을 최신 순으로 최대 10개까지 조회하세요
 2. 조회한 이메일들을 **모두 읽음으로 표시**하세요
 3. 각 이메일에 대해 다음 정보를 추출하세요:
    - id: 이메일 ID
@@ -92,10 +92,7 @@ Lokka MCP (Microsoft 365 MCP)를 사용하여 이메일 목록을 조회하고, 
 ]
 ```
 
-**주의사항:**
-- 읽지 않은 이메일만 조회 (isRead=false 필터)
-- 최신순으로 정렬
-- 최대 10개까지만"""
+**주의:** 읽지 않은 이메일이 없으면 빈 배열 [] 반환"""
 
     try:
         options = ClaudeAgentOptions(
@@ -121,7 +118,7 @@ Lokka MCP (Microsoft 365 MCP)를 사용하여 이메일 목록을 조회하고, 
         )
 
         async with ClaudeSDKClient(options=options) as client:
-            await client.query("받은편지함의 읽지 않은 이메일을 최신 10개까지 조회해주세요.")
+            await client.query("mcp__ms365__* 도구를 사용해서 받은편지함의 읽지 않은 이메일을 최신 10개까지 조회하고 JSON으로 반환해주세요.")
 
             async for message in client.receive_response():
                 if isinstance(message, ResultMessage):
