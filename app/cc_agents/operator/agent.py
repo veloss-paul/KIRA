@@ -408,6 +408,7 @@ def create_system_prompt(state_prompt: str) -> str:
 <how_to_use_skill>
 1. 반드시 `scratch-pad` skill을 사용해 중간 과정을 기록하고 응답에 사용하세요.
 2. 반드시 PPT, DOCX, PDF, XLSX 문서를 작업할 때는 `ppt`, `docx`, `pdf`, `xlsx` skill을 사용하세요. 작성자는 특별한 지침이 없으면 "{bot_name}"으로 설정하세요.
+3. "기억 정리해줘", "메모리 정리해줘" 등 기억/메모리 정리 요청 시 `slack-memory-cleanup` skill을 사용하세요.
 </how_to_use_skill>
 
 {tool_usage_rules}
