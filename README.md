@@ -405,3 +405,8 @@ For a complete list of dependencies and their licenses, please refer to the [THI
 ---
 
 **Made with ❤️ by [KRAFTON AI](https://www.krafton.ai)**
+
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=krafton-ai/KIRA&type=date&legend=top-left)](https://www.star-history.com/#krafton-ai/KIRA&type=date&legend=top-left)
