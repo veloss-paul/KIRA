@@ -1,6 +1,6 @@
 """
 Jira Checker using Rovo MCP
-Monitors Jira issues and collects data through Rovo MCP
+Rovo MCP를 통해 Jira 이슈를 모니터링하고 데이터 수집
 """
 
 import asyncio
@@ -18,24 +18,24 @@ logger = logging.getLogger(__name__)
 
 async def fetch_assigned_issues() -> List[Dict[str, Any]]:
     """
-    Query Jira tickets assigned to me using Rovo MCP
+    Rovo MCP를 사용하여 자기에게 할당된 Jira 티켓 조회
 
     Returns:
-        List of assigned issues
+        할당된 이슈 리스트
     """
     if not settings.ATLASSIAN_ENABLED:
         logger.error("[JIRA_CHECKER] Atlassian MCP is not enabled")
         return []
 
-    prompt = """Jira ticket collection agent.
+    prompt = """Jira 데이터 수집 에이전트입니다.
 
-**Task Instructions:**
-1. Query Jira tickets assigned to me using `mcp__atlassian__*` tools
-2. Only incomplete issues (not Done)
-3. Maximum 10
+**작업 지시:**
+1. `mcp__atlassian__*` 도구로 나에게 할당된 Jira 티켓 조회
+2. 완료되지 않은 (Done이 아닌) 이슈만
+3. 최대 10개
 
-**Output Format:**
-Respond with JSON array only (no explanation):
+**출력 형식:**
+JSON 배열로만 응답 (설명 없이):
 ```json
 [
   {
@@ -56,9 +56,9 @@ Respond with JSON array only (no explanation):
 ]
 ```
 
-**Note:** Return empty array [] if no issues found"""
+**주의:** 이슈 없으면 빈 배열 [] 반환"""
 
-    # Atlassian MCP server settings (remote)
+    # Atlassian MCP 서버 설정 (remote)
     mcp_servers = {
         "atlassian": {
             "command": "npx",
@@ -90,7 +90,7 @@ Respond with JSON array only (no explanation):
 
     try:
         async with ClaudeSDKClient(options=options) as client:
-            await client.query("Use mcp__atlassian__* tools to query assigned Jira tickets and return as JSON.")
+            await client.query("mcp__atlassian__* 도구를 사용해서 할당된 Jira 티켓을 조회하고 JSON으로 반환해주세요.")
 
             result_message = ""
             async for message in client.receive_response():
@@ -104,10 +104,10 @@ Respond with JSON array only (no explanation):
                 logger.info("[JIRA_CHECKER] No result from MCP")
                 return []
 
-            # JSON parsing
+            # JSON 파싱
             import json
 
-            # Remove ```json ``` block
+            # ```json ``` 블록 제거
             if "```json" in result_message:
                 result_message = result_message.split("```json")[1].split("```")[0].strip()
             elif "```" in result_message:
@@ -135,10 +135,10 @@ Respond with JSON array only (no explanation):
 
 async def process_issues_batch(issues: List[Dict[str, Any]]):
     """
-    Process multiple issues in batch (background)
+    여러 이슈를 배치로 처리 (백그라운드)
 
     Args:
-        issues: Issue list
+        issues: 이슈 리스트
     """
     logger.info(f"[JIRA_PROCESSOR] Processing {len(issues)} issues in background")
 
@@ -151,7 +151,7 @@ async def process_issues_batch(issues: List[Dict[str, Any]]):
         priority = fields.get("priority", {}).get("name", "")
         updated = fields.get("updated", "")
 
-        # Generate issue URL
+        # 이슈 URL 생성
         issue_url = f"{settings.ATLASSIAN_JIRA_SITE_URL}/browse/{issue_key}"
 
         logger.info(f"[JIRA_PROCESSOR] [{idx}/{len(issues)}] {issue_key}: {summary}")
@@ -161,7 +161,7 @@ async def process_issues_batch(issues: List[Dict[str, Any]]):
         logger.info(f"[JIRA_PROCESSOR] [{idx}/{len(issues)}] URL: {issue_url}")
         logger.info(f"[JIRA_PROCESSOR] [{idx}/{len(issues)}] Updated: {updated}")
 
-    # 1. Exclude tickets already in DB
+    # 1. DB에 이미 있는 티켓 제외
     from app.cc_checkers.atlassian.jira_agent import call_jira_task_extractor
     from app.cc_utils.jira_tasks_db import (
         get_pending_tasks,
@@ -184,7 +184,7 @@ async def process_issues_batch(issues: List[Dict[str, Any]]):
             f"[JIRA_PROCESSOR] Found {len(new_issues)} new issues out of {len(issues)} total"
         )
 
-        # 2. Call agent to extract tasks from new tickets and save to DB
+        # 2. 에이전트 호출하여 새로운 티켓에서 할 일 추출 및 DB에 저장
         result = await call_jira_task_extractor(new_issues)
 
         if result:
@@ -193,22 +193,22 @@ async def process_issues_batch(issues: List[Dict[str, Any]]):
         else:
             logger.info(f"[JIRA_PROCESSOR] No tasks extracted from tickets")
 
-    # 3. Query pending tasks from DB (always perform)
+    # 3. DB에서 pending tasks 조회 (항상 수행)
     pending_tasks = get_pending_tasks()
 
     if pending_tasks:
         logger.info(f"[JIRA_PROCESSOR] Found {len(pending_tasks)} pending tasks")
 
-        # 4. Enqueue message to Slack queue
+        # 4. Slack 큐에 메시지 enqueue
         for task in pending_tasks:
             task_id = task["id"]
             user_id = task.get("user")
             text = task.get("text")
             channel_id = task.get("channel")
 
-            # Only add to queue if user, text, channel all exist
+            # user, text, channel이 모두 있는 경우에만 큐에 추가
             if user_id and text and channel_id:
-                # Add to Slack queue (same pattern as web interface)
+                # Slack 큐에 추가 (웹 인터페이스와 동일한 패턴)
                 await enqueue_message({
                     "text": text,
                     "channel": channel_id,
@@ -218,7 +218,7 @@ async def process_issues_batch(issues: List[Dict[str, Any]]):
                 })
                 logger.info(f"[JIRA_PROCESSOR] Enqueued task {task_id} to user {user_id}")
 
-                # 5. Mark task as complete
+                # 5. Task를 완료 처리
                 complete_task(task_id)
             else:
                 logger.warning(
@@ -234,8 +234,8 @@ async def process_issues_batch(issues: List[Dict[str, Any]]):
 
 async def check_jira_updates():
     """
-    Check assigned Jira tickets and batch process
-    Called periodically by scheduler
+    할당된 Jira 티켓 체크 및 배치 처리
+    스케줄러에서 주기적으로 호출됨
     """
     if not settings.ATLASSIAN_ENABLED:
         logger.info("[JIRA_CHECKER] Atlassian MCP is not enabled")
