@@ -17,6 +17,23 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
+// Platform utilities
+const {
+  isWindows,
+  isMac,
+  PATH_SEP,
+  getUvPossiblePaths,
+  getNpmPossiblePaths,
+  getClaudeCliPossiblePaths,
+  getStandardBinPaths,
+  getNvmBasePath,
+  getNpxName,
+  getClaudeName,
+  getWhichCommand,
+  getUvInstallCommand,
+  getUvBinDir,
+} = require('./platform-utils');
+
 // ============================================================================
 // i18n - Internationalization
 // ============================================================================
@@ -87,17 +104,9 @@ const CONFIG_DIR = path.join(os.homedir(), '.kira');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.env');
 const LOG_FILE = path.join(CONFIG_DIR, 'server.log');
 
-const UV_POSSIBLE_PATHS = [
-  path.join(os.homedir(), '.cargo', 'bin', 'uv'),     // Old version
-  path.join(os.homedir(), '.local', 'bin', 'uv'),     // New version + pipx
-  '/usr/local/bin/uv',                                 // Homebrew Intel
-  '/opt/homebrew/bin/uv'                              // Homebrew Apple Silicon
-];
-
-const NPM_POSSIBLE_PATHS = [
-  '/usr/local/bin/npm',     // Default npm location
-  '/opt/homebrew/bin/npm'   // Homebrew on Apple Silicon
-];
+// UV and npm paths are now provided by platform-utils
+const UV_POSSIBLE_PATHS = getUvPossiblePaths();
+const NPM_POSSIBLE_PATHS = getNpmPossiblePaths();
 
 // ============================================================================
 // GLOBAL STATE
@@ -181,12 +190,15 @@ function findUvPath() {
     }
   }
 
-  // Try 'which' command as fallback
+  // Try 'which' (Unix) or 'where' (Windows) command as fallback
   try {
-    const whichResult = execSync('which uv', { encoding: 'utf8' }).trim();
-    if (whichResult) {
-      log.info('Found uv via PATH at:', whichResult);
-      return whichResult;
+    const findCmd = getWhichCommand();
+    const result = execSync(`${findCmd} uv`, { encoding: 'utf8' }).trim();
+    // 'where' on Windows can return multiple lines, take first
+    const firstPath = result.split('\n')[0].trim();
+    if (firstPath) {
+      log.info('Found uv via PATH at:', firstPath);
+      return firstPath;
     }
   } catch (err) {
     log.warn('uv not found in PATH');
@@ -222,8 +234,8 @@ async function installUv() {
   log.info('Installing uv package manager...');
 
   return new Promise((resolve, reject) => {
-    const installCmd = 'curl -LsSf https://astral.sh/uv/install.sh | sh';
-    const proc = spawn('sh', ['-c', installCmd], { stdio: 'pipe' });
+    const installConfig = getUvInstallCommand();
+    const proc = spawn(installConfig.command, installConfig.args, { stdio: 'pipe' });
 
     proc.stdout.on('data', (data) => {
       log.info('uv install:', data.toString());
@@ -237,7 +249,8 @@ async function installUv() {
       if (code === 0) {
         log.info('uv installed successfully');
         // Add to PATH for current session
-        process.env.PATH = `${os.homedir()}/.cargo/bin:${process.env.PATH}`;
+        const uvBinDir = getUvBinDir();
+        process.env.PATH = `${uvBinDir}${PATH_SEP}${process.env.PATH}`;
         resolve(true);
       } else {
         log.error('uv installation failed with code:', code);
@@ -300,22 +313,25 @@ async function ensureUv() {
  * @returns {boolean} - Whether Claude CLI was found
  */
 function setupClaudeCLI(env) {
-  // Possible Claude CLI locations
-  const possiblePaths = [
-    '/usr/local/bin/claude',                                   // npm global default
-    '/opt/homebrew/bin/claude',                                // Homebrew on Apple Silicon
-    path.join(os.homedir(), '.npm-global/bin/claude'),         // User npm global
-    path.join(os.homedir(), '.nvm/versions/node', 'v*/bin/claude'),  // nvm pattern
-  ];
+  const claudeName = getClaudeName();
+
+  // Get platform-specific possible paths
+  const possiblePaths = getClaudeCliPossiblePaths();
 
   // Try to find npm and get its global bin
   try {
     for (const npmPath of NPM_POSSIBLE_PATHS) {
       if (fs.existsSync(npmPath)) {
-        const globalNpmBin = execSync(`${npmPath} root -g`, { encoding: 'utf8' })
-          .trim()
-          .replace('/lib/node_modules', '/bin');
-        possiblePaths.unshift(path.join(globalNpmBin, 'claude'));
+        const globalNpmRoot = execSync(`"${npmPath}" root -g`, { encoding: 'utf8' }).trim();
+        // On Windows: C:\Users\...\AppData\Roaming\npm\node_modules -> C:\Users\...\AppData\Roaming\npm
+        // On Unix: /usr/local/lib/node_modules -> /usr/local/bin
+        let globalNpmBin;
+        if (isWindows) {
+          globalNpmBin = path.dirname(globalNpmRoot);  // Remove node_modules
+        } else {
+          globalNpmBin = globalNpmRoot.replace('/lib/node_modules', '/bin');
+        }
+        possiblePaths.unshift(path.join(globalNpmBin, claudeName));
         log.info('Found npm global bin:', globalNpmBin);
         break;
       }
@@ -326,26 +342,39 @@ function setupClaudeCLI(env) {
 
   // Check each possible path for Claude CLI
   for (const claudePath of possiblePaths) {
-    // Handle nvm path specially
-    if (claudePath.includes('*')) {
-      const nvmBase = path.join(os.homedir(), '.nvm/versions/node');
-      if (fs.existsSync(nvmBase)) {
-        const versions = fs.readdirSync(nvmBase);
-        for (const version of versions) {
-          const nvmClaudePath = path.join(nvmBase, version, 'bin/claude');
-          if (fs.existsSync(nvmClaudePath)) {
-            env.CLAUDE_CODE_CLI_PATH = nvmClaudePath;
-            env.PATH = `${path.dirname(nvmClaudePath)}:${env.PATH}`;
-            log.info('Found Claude CLI via nvm:', nvmClaudePath);
-            return true;
-          }
-        }
-      }
-    } else if (fs.existsSync(claudePath)) {
+    if (fs.existsSync(claudePath)) {
       env.CLAUDE_CODE_CLI_PATH = claudePath;
-      env.PATH = `${path.dirname(claudePath)}:${env.PATH}`;
+      env.PATH = `${path.dirname(claudePath)}${PATH_SEP}${env.PATH}`;
       log.info('Found Claude CLI at:', claudePath);
       return true;
+    }
+  }
+
+  // Check nvm installation
+  const nvmBase = getNvmBasePath();
+  if (fs.existsSync(nvmBase)) {
+    try {
+      const versions = fs.readdirSync(nvmBase);
+      // On Windows nvm, versions are like v18.17.0
+      // On Unix nvm, versions are like v18.17.0
+      for (const version of versions) {
+        let nvmClaudePath;
+        if (isWindows) {
+          // nvm-windows: NVM_HOME/v18.17.0/claude.cmd
+          nvmClaudePath = path.join(nvmBase, version, claudeName);
+        } else {
+          // Unix nvm: ~/.nvm/versions/node/v18.17.0/bin/claude
+          nvmClaudePath = path.join(nvmBase, version, 'bin', 'claude');
+        }
+        if (fs.existsSync(nvmClaudePath)) {
+          env.CLAUDE_CODE_CLI_PATH = nvmClaudePath;
+          env.PATH = `${path.dirname(nvmClaudePath)}${PATH_SEP}${env.PATH}`;
+          log.info('Found Claude CLI via nvm:', nvmClaudePath);
+          return true;
+        }
+      }
+    } catch (e) {
+      log.warn('Error reading nvm versions:', e.message);
     }
   }
 
@@ -360,19 +389,18 @@ function setupClaudeCLI(env) {
  * @returns {boolean} - Whether npx was found
  */
 function setupNodePath(env) {
+  const npxName = getNpxName();
+
   // Standard locations to check for npx
-  const standardPaths = [
-    '/usr/local/bin',
-    '/opt/homebrew/bin'
-  ];
+  const standardPaths = getStandardBinPaths();
 
   for (const binPath of standardPaths) {
-    const npxPath = path.join(binPath, 'npx');
+    const npxPath = path.join(binPath, npxName);
     if (fs.existsSync(npxPath)) {
       // Check if binPath is already in PATH (exact match)
-      const pathDirs = (env.PATH || '').split(':');
+      const pathDirs = (env.PATH || '').split(PATH_SEP);
       if (!pathDirs.includes(binPath)) {
-        env.PATH = `${binPath}:${env.PATH}`;
+        env.PATH = `${binPath}${PATH_SEP}${env.PATH}`;
         log.info('Added to PATH for npx:', binPath);
       } else {
         log.info('PATH already contains:', binPath);
@@ -383,17 +411,26 @@ function setupNodePath(env) {
   }
 
   // Check nvm installation
-  const nvmBase = path.join(os.homedir(), '.nvm/versions/node');
+  const nvmBase = getNvmBasePath();
   if (fs.existsSync(nvmBase)) {
     try {
       const versions = fs.readdirSync(nvmBase);
       versions.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
 
       for (const version of versions) {
-        const nvmBinPath = path.join(nvmBase, version, 'bin');
-        const nvmNpxPath = path.join(nvmBinPath, 'npx');
+        let nvmBinPath;
+        let nvmNpxPath;
+        if (isWindows) {
+          // nvm-windows: NVM_HOME/v18.17.0/npx.cmd
+          nvmBinPath = path.join(nvmBase, version);
+          nvmNpxPath = path.join(nvmBinPath, npxName);
+        } else {
+          // Unix nvm: ~/.nvm/versions/node/v18.17.0/bin/npx
+          nvmBinPath = path.join(nvmBase, version, 'bin');
+          nvmNpxPath = path.join(nvmBinPath, 'npx');
+        }
         if (fs.existsSync(nvmNpxPath)) {
-          env.PATH = `${nvmBinPath}:${env.PATH}`;
+          env.PATH = `${nvmBinPath}${PATH_SEP}${env.PATH}`;
           log.info('Found npx via nvm:', nvmNpxPath);
           return true;
         }
@@ -481,16 +518,27 @@ async function startServer() {
   const appPath = getPythonPath();
   const logStream = fs.createWriteStream(LOG_FILE, { flags: 'a' });
 
-  pythonProcess = spawn(uvPath, ['run', 'python', '-m', 'app.main'], {
+  // ============ TEMPORARY TEST MODE ============
+  // Options: 'test_sdk.py', 'test_cli_direct.py', 'test_agent.py', 'test_slack_bolt_context.py', or null
+  // const TEST_SCRIPT = 'test_slack_bolt_context.py';  // Test sequential SDK calls
+  const TEST_SCRIPT = null;  // Test sequential SDK calls
+  // =============================================
+
+  const pythonArgs = TEST_SCRIPT
+    ? ['run', 'python', TEST_SCRIPT]
+    : ['run', 'python', '-m', 'app.main'];
+
+  log.info('Python args:', pythonArgs);
+
+  pythonProcess = spawn(uvPath, pythonArgs, {
     cwd: appPath,
     env: env,
-    stdio: ['pipe', 'pipe', 'pipe'],
     detached: process.platform !== 'win32'  // Create process group on Unix
   });
 
   // Pipe logs
-  pythonProcess.stdout.pipe(logStream);
-  pythonProcess.stderr.pipe(logStream);
+  // pythonProcess.stdout.pipe(logStream);
+  // pythonProcess.stderr.pipe(logStream);
 
   // Send logs to renderer with parsed log level
   const parseLogLevel = (logLine) => {
@@ -551,63 +599,83 @@ function stopServer() {
 
   console.log('Stopping Python server...');
   const pid = pythonProcess.pid;
-  const processToKill = pythonProcess;
 
   // Clear reference immediately
   pythonProcess = null;
 
-  // Kill all related processes (uv, python, and port 8000)
-  const killCommand = `
-    # Kill process group
-    kill -TERM -${pid} 2>/dev/null || true
-    # Kill uv and python processes by name
-    pkill -TERM -f "uv run python.*app.main" 2>/dev/null || true
-    pkill -TERM -f "python.*app.main" 2>/dev/null || true
-    # Kill port 8000 processes
-    lsof -ti:8000 | xargs kill -TERM 2>/dev/null || true
-  `;
+  if (isWindows) {
+    // Windows: Use taskkill to terminate process tree
+    try {
+      // /T = terminate child processes, /F = force
+      execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore' });
+      console.log('Terminated process tree for PID', pid);
+    } catch (err) {
+      console.error('Error terminating process:', err.message);
+    }
 
-  try {
-    if (process.platform !== 'win32') {
+    // Also kill any processes using port 8000
+    try {
+      // Find process using port 8000
+      const netstatOutput = execSync('netstat -ano | findstr :8000 | findstr LISTENING', { encoding: 'utf8' });
+      const lines = netstatOutput.trim().split('\n');
+      for (const line of lines) {
+        const parts = line.trim().split(/\s+/);
+        const portPid = parts[parts.length - 1];
+        if (portPid && portPid !== pid.toString()) {
+          try {
+            execSync(`taskkill /PID ${portPid} /F`, { stdio: 'ignore' });
+            console.log('Killed process on port 8000:', portPid);
+          } catch (e) {
+            // Process may already be gone
+          }
+        }
+      }
+    } catch (err) {
+      // No process on port 8000, which is fine
+    }
+  } else {
+    // Unix: Kill all related processes (uv, python, and port 8000)
+    const killCommand = `
+      # Kill process group
+      kill -TERM -${pid} 2>/dev/null || true
+      # Kill uv and python processes by name
+      pkill -TERM -f "uv run python.*app.main" 2>/dev/null || true
+      pkill -TERM -f "python.*app.main" 2>/dev/null || true
+      # Kill port 8000 processes
+      lsof -ti:8000 | xargs kill -TERM 2>/dev/null || true
+    `;
+
+    try {
       const killProc = spawn('sh', ['-c', killCommand]);
       killProc.on('close', () => {
         console.log('Sent SIGTERM to all server processes');
       });
-    } else {
-      // Windows: just kill the process
-      processToKill.kill('SIGTERM');
-      console.log('Sent SIGTERM to process', pid);
+    } catch (err) {
+      console.error('Error sending SIGTERM:', err);
     }
-  } catch (err) {
-    console.error('Error sending SIGTERM:', err);
-  }
 
-  // Force kill after 2 seconds if still running
-  setTimeout(() => {
-    const forceKillCommand = `
-      # Force kill process group
-      kill -KILL -${pid} 2>/dev/null || true
-      # Force kill uv and python processes
-      pkill -KILL -f "uv run python.*app.main" 2>/dev/null || true
-      pkill -KILL -f "python.*app.main" 2>/dev/null || true
-      # Force kill port 8000
-      lsof -ti:8000 | xargs kill -KILL 2>/dev/null || true
-    `;
+    // Force kill after 2 seconds if still running
+    setTimeout(() => {
+      const forceKillCommand = `
+        # Force kill process group
+        kill -KILL -${pid} 2>/dev/null || true
+        # Force kill uv and python processes
+        pkill -KILL -f "uv run python.*app.main" 2>/dev/null || true
+        pkill -KILL -f "python.*app.main" 2>/dev/null || true
+        # Force kill port 8000
+        lsof -ti:8000 | xargs kill -KILL 2>/dev/null || true
+      `;
 
-    try {
-      if (process.platform !== 'win32') {
+      try {
         const forceKillProc = spawn('sh', ['-c', forceKillCommand]);
         forceKillProc.on('close', () => {
           console.log('Force killed all server processes');
         });
-      } else {
-        processToKill.kill('SIGKILL');
-        console.log('Sent SIGKILL to process', pid);
+      } catch (err) {
+        console.error('Error during force kill:', err);
       }
-    } catch (err) {
-      console.error('Error during force kill:', err);
-    }
-  }, 2000);
+    }, 2000);
+  }
 }
 
 /**
@@ -625,20 +693,31 @@ function isServerRunning() {
  * Create the main application window
  */
 function createMainWindow() {
-  mainWindow = new BrowserWindow({
+  // Base window options
+  const windowOptions = {
     width: 900,
     height: 620,
     minWidth: 800,
     minHeight: 520,
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 20, y: 20 },
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,  // Allow fs/path in preload for i18n
       preload: path.join(__dirname, 'preload.js')
     }
-  });
+  };
+
+  // Platform-specific window styling
+  if (isMac) {
+    // macOS: Use hidden title bar with traffic light controls
+    windowOptions.titleBarStyle = 'hiddenInset';
+    windowOptions.trafficLightPosition = { x: 20, y: 20 };
+  } else if (isWindows) {
+    // Windows: Use default frame
+    windowOptions.frame = true;
+  }
+
+  mainWindow = new BrowserWindow(windowOptions);
 
   mainWindow.loadFile('renderer/index.html');
 
