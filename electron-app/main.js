@@ -546,8 +546,8 @@ async function startServer() {
   }
 
   // Pipe logs
-  // pythonProcess.stdout.pipe(logStream);
-  // pythonProcess.stderr.pipe(logStream);
+  pythonProcess.stdout.pipe(logStream);
+  pythonProcess.stderr.pipe(logStream);
 
   // Send logs to renderer with parsed log level
   const parseLogLevel = (logLine) => {
